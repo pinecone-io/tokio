@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 cfg_rt! {
     pub(crate) mod current_thread;
     pub(crate) use current_thread::CurrentThread;
@@ -8,6 +11,9 @@ cfg_rt_multi_thread! {
     pub(crate) use multi_thread::MultiThread;
 }
 
+pub(crate) mod yolo;
+pub(crate) use yolo::Yolo;
+
 use crate::runtime::driver;
 
 #[derive(Debug, Clone)]
@@ -17,6 +23,8 @@ pub(crate) enum Handle {
 
     #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
     MultiThread(Arc<multi_thread::Handle>),
+
+    Yolo(Arc<yolo::Handle>),
 
     // TODO: This is to avoid triggering "dead code" warnings many other places
     // in the codebase. Remove this during a later cleanup
@@ -34,6 +42,8 @@ impl Handle {
 
             #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
             Handle::MultiThread(ref h) => &h.driver,
+
+	    Handle::Yolo(ref h) => &h.driver,
 
             #[cfg(not(feature = "rt"))]
             Handle::Disabled => unreachable!(),
@@ -64,6 +74,8 @@ cfg_rt! {
 
                 #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
                 Handle::MultiThread(h) => &h.blocking_spawner,
+
+		Handle::Yolo(h) => todo!(),
             }
         }
 
@@ -77,6 +89,8 @@ cfg_rt! {
 
                 #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
                 Handle::MultiThread(h) => multi_thread::Handle::spawn(h, future, id),
+
+		Handle::Yolo(h) => yolo::Handle::spawn(h, future, id),
             }
         }
 
@@ -86,6 +100,8 @@ cfg_rt! {
 
                 #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
                 Handle::MultiThread(ref h) => h.shutdown(),
+
+		Handle::Yolo(_) => todo!(),
             }
         }
 
@@ -95,6 +111,8 @@ cfg_rt! {
 
                 #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
                 Handle::MultiThread(h) => &h.seed_generator,
+
+		Handle::Yolo(h) => &h.seed_generator,
             }
         }
 
@@ -105,6 +123,14 @@ cfg_rt! {
                 _ => panic!("not a CurrentThread handle"),
             }
         }
+
+	pub(crate) fn as_yolo(&self) -> &Arc<yolo::Handle> {
+            match self {
+                Handle::Yolo(handle) => handle,
+                _ => panic!("not a yolo handle"),
+            }
+        }
+
     }
 
     cfg_metrics! {

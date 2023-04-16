@@ -187,6 +187,7 @@ pub(crate) enum Kind {
     CurrentThread,
     #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
     MultiThread,
+    Yolo,
 }
 
 impl Builder {
@@ -206,6 +207,10 @@ impl Builder {
         const EVENT_INTERVAL: u32 = 61;
 
         Builder::new(Kind::CurrentThread, 31, EVENT_INTERVAL)
+    }
+
+    pub fn new_yolo() -> Builder {
+	Builder::new(Kind::Yolo, 31, 4)
     }
 
     cfg_not_wasi! {
@@ -640,6 +645,7 @@ impl Builder {
             Kind::CurrentThread => self.build_current_thread_runtime(),
             #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
             Kind::MultiThread => self.build_threaded_runtime(),
+	    Kind::Yolo => self.build_yolo(),
         }
     }
 
@@ -649,6 +655,7 @@ impl Builder {
                 Kind::CurrentThread => true,
                 #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
                 Kind::MultiThread => false,
+		Kind::Yolo => true,
             },
             enable_io: self.enable_io,
             enable_time: self.enable_time,
@@ -918,6 +925,30 @@ impl Builder {
 
         Ok(Runtime::from_parts(
             Scheduler::CurrentThread(scheduler),
+            handle,
+            blocking_pool,
+        ))
+    }
+
+    fn build_yolo(&mut self) -> io::Result<Runtime> {
+	use crate::runtime::scheduler::{self, Yolo};
+        use crate::runtime::{runtime::Scheduler};
+
+	let (driver, driver_handle) = driver::Driver::new(self.get_cfg())?;
+
+	// IKTODO blockings should also be interleaved, possibly using shuttle
+	let blocking_pool = blocking::create_blocking_pool(self, self.max_blocking_threads);
+
+	let seed_generator_1 = self.seed_generator.next_generator();
+
+	let (scheduler, handle) = Yolo::new(driver, driver_handle, seed_generator_1);
+
+	let handle = Handle {
+	    inner: scheduler::Handle::Yolo(handle),
+	};
+
+        Ok(Runtime::from_parts(
+            Scheduler::Yolo(scheduler),
             handle,
             blocking_pool,
         ))

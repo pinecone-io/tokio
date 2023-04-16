@@ -347,11 +347,19 @@ impl<S: 'static> Task<S> {
     fn header_ptr(&self) -> NonNull<Header> {
         self.raw.header_ptr()
     }
+
+    pub fn id(&self) -> Id {
+	unsafe { Header::get_id(self.raw.header_ptr()) }
+    }
 }
 
 impl<S: 'static> Notified<S> {
-    fn header(&self) -> &Header {
+    pub(crate) fn header(&self) -> &Header {
         self.0.header()
+    }
+
+    pub fn id(&self) -> Id {
+	self.0.id()
     }
 }
 

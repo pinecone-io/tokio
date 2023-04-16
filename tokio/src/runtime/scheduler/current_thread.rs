@@ -151,8 +151,10 @@ impl CurrentThread {
         // available or the future is complete.
         loop {
             if let Some(core) = self.take_core(handle) {
+		println!("IKDEBUG took current core");
                 return core.block_on(future);
             } else {
+		println!("IKDEBUG current core unavailable");
                 let notified = self.notify.notified();
                 pin!(notified);
 
@@ -387,6 +389,7 @@ impl Handle {
     fn waker_ref(me: &Arc<Self>) -> WakerRef<'_> {
         // Set woken to true when enter block_on, ensure outer future
         // be polled for the first time when enter loop
+	//println!("Custom backtrace: {}", std::backtrace::Backtrace::force_capture());
         me.shared.woken.store(true, Release);
         waker_ref(me)
     }
@@ -528,26 +531,35 @@ impl CoreGuard<'_> {
     #[track_caller]
     fn block_on<F: Future>(self, future: F) -> F::Output {
         let ret = self.enter(|mut core, context| {
-            let waker = Handle::waker_ref(&context.handle);
+            let waker = Handle::waker_ref(&context.handle); // IK this wakes the first time
             let mut cx = std::task::Context::from_waker(&waker);
 
             pin!(future);
 
+	    println!("IKDEBUG start loop");
             'outer: loop {
                 let handle = &context.handle;
-
+		//println!("IKDEBUG in loop {:?}", handle.shared.config);
                 if handle.reset_woken() {
+		    println!("IKDEBUG is woken");
                     let (c, res) = context.enter(core, || {
+			// IK: if we can get the core, future is run directly
                         crate::runtime::coop::budget(|| future.as_mut().poll(&mut cx))
                     });
 
                     core = c;
 
+		    // If future returned directly, just return what it gave us
                     if let Ready(v) = res {
+			println!("IKDEBUG returning without even trying");
                         return (core, Some(v));
                     }
-                }
+                } else {
+		    println!("IKDEBUG not woken");
+		}
+			
 
+		println!("IKDEBUG poll everything else");
                 for _ in 0..handle.shared.config.event_interval {
                     // Make sure we didn't hit an unhandled_panic
                     if core.unhandled_panic {
@@ -558,6 +570,14 @@ impl CoreGuard<'_> {
                     let tick = core.tick;
                     core.tick = core.tick.wrapping_add(1);
 
+		    println!("IKDEBUG core tasks len {} shared {:?}",
+			     core.tasks.len(),
+			     handle.shared
+			     .queue
+			     .lock()
+			     .as_ref()
+			     .map(|queue| queue.len())
+			     .unwrap_or(0));
                     let entry = if tick % handle.shared.config.global_queue_interval == 0 {
                         handle.pop().or_else(|| core.tasks.pop_front())
                     } else {

@@ -305,6 +305,8 @@ impl Handle {
             scheduler::Handle::CurrentThread(_) => RuntimeFlavor::CurrentThread,
             #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
             scheduler::Handle::MultiThread(_) => RuntimeFlavor::MultiThread,
+
+	    scheduler::Handle::Yolo(_) => RuntimeFlavor::Yolo,
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::runtime::blocking::BlockingPool;
-use crate::runtime::scheduler::CurrentThread;
+use crate::runtime::scheduler::{CurrentThread, Yolo};
 use crate::runtime::{context, EnterGuard, Handle};
 use crate::task::JoinHandle;
 
@@ -84,6 +84,8 @@ pub enum RuntimeFlavor {
     CurrentThread,
     /// The flavor that executes tasks across multiple threads.
     MultiThread,
+
+    Yolo,
 }
 
 /// The runtime scheduler is either a multi-thread or a current-thread executor.
@@ -95,6 +97,8 @@ pub(super) enum Scheduler {
     /// Execute tasks across multiple threads.
     #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
     MultiThread(MultiThread),
+
+    Yolo(Yolo),
 }
 
 impl Runtime {
@@ -302,6 +306,8 @@ impl Runtime {
             Scheduler::CurrentThread(exec) => exec.block_on(&self.handle.inner, future),
             #[cfg(all(feature = "rt-multi-thread", not(tokio_wasi)))]
             Scheduler::MultiThread(exec) => exec.block_on(&self.handle.inner, future),
+
+	    Scheduler::Yolo(exec) => exec.block_on(&self.handle.inner, future),
         }
     }
 
@@ -422,6 +428,10 @@ impl Drop for Runtime {
                 // already in the runtime's context.
                 multi_thread.shutdown(&self.handle.inner);
             }
+
+	    Scheduler::Yolo(yolo) => {
+		println!("TODO do something with shutdown");
+	    }
         }
     }
 }
