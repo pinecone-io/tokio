@@ -70,3 +70,51 @@ fn run_with_seed(seed: u64) -> Vec<Invokation> {
     }
     order
 }
+
+#[test]
+fn test_demo() {
+    demo_run_with_seed(false, 1);
+    demo_run_with_seed(true, 1);
+    demo_run_with_seed(true, 1);
+    demo_run_with_seed(true, 2);
+    demo_run_with_seed(true, 1);
+}
+
+fn demo_run_with_seed(yolo: bool, seed: u64) {
+    println!("Demo run, seed {seed}, using yolo {yolo}");
+    let runtime = if yolo {
+	crate::runtime::Builder::new_yolo().enable_all()
+	    .yolo_settings(crate::runtime::scheduler::yolo::YoloSettings{seed}).build().expect("blah")
+    } else {
+	crate::runtime::Builder::new_current_thread().enable_all().build().expect("blah")
+    };
+
+    let t1 = runtime.spawn(async move {
+	for i in 0..5 {
+	    crate::time::sleep(crate::time::Duration::from_millis(100)).await;
+	    println!("task 1, iteration {i} - {}", 10 + i);
+	}
+    });
+    let t2 = runtime.spawn(async move {
+	for i in 0..10 {
+	    crate::time::sleep(crate::time::Duration::from_millis(20)).await;
+	    println!("task 2, iteration {i} - {}", 20 + i);
+	    
+	    if i == 3 {
+		crate::spawn(async move {
+		    for i in 0..3 {
+			crate::time::sleep(crate::time::Duration::from_millis(200)).await;
+			println!("task 3, iteration {i} - {}", 30 + i);
+		    }
+		});
+	    }
+	}
+    });
+    
+    runtime.block_on(async move {
+	async {
+	    _ = t1.await;
+	    _ = t2.await;
+	}.await;
+    });
+}

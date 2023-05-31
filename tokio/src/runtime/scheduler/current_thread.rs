@@ -151,10 +151,10 @@ impl CurrentThread {
         // available or the future is complete.
         loop {
             if let Some(core) = self.take_core(handle) {
-		println!("IKDEBUG took current core");
+		//println!("IKDEBUG took current core");
                 return core.block_on(future);
             } else {
-		println!("IKDEBUG current core unavailable");
+		//println!("IKDEBUG current core unavailable");
                 let notified = self.notify.notified();
                 pin!(notified);
 
@@ -536,12 +536,12 @@ impl CoreGuard<'_> {
 
             pin!(future);
 
-	    println!("IKDEBUG start loop");
+	    //println!("IKDEBUG start loop");
             'outer: loop {
                 let handle = &context.handle;
 		//println!("IKDEBUG in loop {:?}", handle.shared.config);
                 if handle.reset_woken() {
-		    println!("IKDEBUG is woken");
+		    //println!("IKDEBUG is woken");
                     let (c, res) = context.enter(core, || {
 			// IK: if we can get the core, future is run directly
                         crate::runtime::coop::budget(|| future.as_mut().poll(&mut cx))
@@ -551,15 +551,15 @@ impl CoreGuard<'_> {
 
 		    // If future returned directly, just return what it gave us
                     if let Ready(v) = res {
-			println!("IKDEBUG returning without even trying");
+			//println!("IKDEBUG returning without even trying");
                         return (core, Some(v));
                     }
                 } else {
-		    println!("IKDEBUG not woken");
+		    //println!("IKDEBUG not woken");
 		}
 			
 
-		println!("IKDEBUG poll everything else");
+		//println!("IKDEBUG poll everything else");
                 for _ in 0..handle.shared.config.event_interval {
                     // Make sure we didn't hit an unhandled_panic
                     if core.unhandled_panic {
@@ -570,14 +570,14 @@ impl CoreGuard<'_> {
                     let tick = core.tick;
                     core.tick = core.tick.wrapping_add(1);
 
-		    println!("IKDEBUG core tasks len {} shared {:?}",
-			     core.tasks.len(),
-			     handle.shared
-			     .queue
-			     .lock()
-			     .as_ref()
-			     .map(|queue| queue.len())
-			     .unwrap_or(0));
+		    // println!("IKDEBUG core tasks len {} shared {:?}",
+		    // 	     core.tasks.len(),
+		    // 	     handle.shared
+		    // 	     .queue
+		    // 	     .lock()
+		    // 	     .as_ref()
+		    // 	     .map(|queue| queue.len())
+		    // 	     .unwrap_or(0));
                     let entry = if tick % handle.shared.config.global_queue_interval == 0 {
                         handle.pop().or_else(|| core.tasks.pop_front())
                     } else {
