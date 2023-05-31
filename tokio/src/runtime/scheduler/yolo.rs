@@ -1,6 +1,6 @@
 use std::time::Duration;
 use crate::runtime::driver::{self, Driver};
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashSet};
 use crate::util::atomic_cell::AtomicCell;
 use std::cell::RefCell;
 use crate::runtime::task::{self, JoinHandle, OwnedTasks, Schedule, Task};
@@ -9,8 +9,21 @@ use crate::util::{waker_ref, RngSeedGenerator, Wake, WakerRef};
 use crate::runtime::{blocking, context, scheduler, Config};
 use std::future::Future;
 use std::task::Poll::{Pending, Ready};
-
+use std::ops::DerefMut;
 use std::fmt;
+use rand::{Rng, SeedableRng};
+use rand::seq::SliceRandom;
+use rand::rngs::StdRng;
+
+pub struct YoloSettings {
+    pub seed: u64,
+}
+
+impl Default for YoloSettings {
+    fn default() -> Self {
+	YoloSettings{seed: 0}
+    }
+}
 
 /// Thread-local context.
 struct Context {
@@ -24,6 +37,7 @@ fn did_defer_tasks() -> bool {
 }
 
 fn wake_deferred_tasks() {
+    //println!("wake_deferred");
     context::with_defer(|deferred| deferred.wake());
 }
 
@@ -50,7 +64,7 @@ impl Context {
     /// including I/O events, timer events, ...
     fn park(&self, mut core: Box<Core>, handle: &Handle) -> Box<Core> {
         let mut driver = core.driver.take().expect("driver missing");
-
+	//println!("park");
         if handle.tasks.lock().as_ref().map(|t| t.is_empty()).unwrap_or(true) {
             let (c, _) = self.enter(core, || {
                 driver.park(&handle.driver);
@@ -67,7 +81,7 @@ impl Context {
     /// Checks the driver for new events without blocking the thread.
     fn park_yield(&self, mut core: Box<Core>, handle: &Handle) -> Box<Core> {
         let mut driver = core.driver.take().expect("driver missing");
-
+	//println!("park_yield");
         let (mut core, _) = self.enter(core, || {
             driver.park_timeout(&handle.driver, Duration::from_millis(0));
             wake_deferred_tasks();
@@ -90,11 +104,16 @@ pub(crate) struct Handle {
 
     tasks: Mutex<Option<VecDeque<task::Notified<Arc<Handle>>>>>,
 
+    live: Mutex<HashSet<u64>>,
+    queued_tasks: Mutex<VecDeque<task::Notified<Arc<Handle>>>>,
+
     /// Resource driver handles
     pub(crate) driver: driver::Handle,
 
     /// Current random number generator seed
     pub(crate) seed_generator: RngSeedGenerator,
+
+    rng: Mutex<StdRng>,
 }
 
 struct Core {
@@ -106,12 +125,18 @@ impl Yolo {
 	driver: Driver,
         driver_handle: driver::Handle,
 	seed_generator: RngSeedGenerator,
+	settings: YoloSettings,
     ) -> (Yolo, Arc<Handle>) {
 	let core = AtomicCell::new(Some(Box::new(Core {driver: Some(driver)})));
+	let rng: StdRng = SeedableRng::seed_from_u64(settings.seed);
 	let handle = Handle{owned: OwnedTasks::new(),
 			    tasks: Mutex::new(Some(VecDeque::with_capacity(10))),
+			    live: Mutex::new(HashSet::new()),
+			    queued_tasks: Mutex::new(VecDeque::with_capacity(10)),
 			    driver: driver_handle,
-			    seed_generator};
+			    seed_generator,
+			    rng: Mutex::new(rng),
+	};
 	let yolo = Yolo {
 	    core,
 	};
@@ -125,7 +150,6 @@ impl Yolo {
 	let handle = handle.as_yolo();
 	loop {
             if let Some(core) = self.take_core(handle) {
-		println!("IKDEBUG took current core");
                 return core.block_on(future);
             } else {
 		panic!("WTF, no core");
@@ -144,7 +168,6 @@ impl Yolo {
             scheduler: self,
         })
     }
-
 }
 
 impl Handle {
@@ -158,14 +181,12 @@ impl Handle {
         F: crate::future::Future + Send + 'static,
         F::Output: Send + 'static,
     {
-	println!("SPAWNING! {id}");
         let (handle, notified) = me.owned.bind(future, me.clone(), id);
 
 	if let Some(notified) = notified {
             me.schedule(notified);
         }
 
-	
 	handle
     }
 
@@ -174,6 +195,30 @@ impl Handle {
             Some(queue) => queue.pop_front(),
             None => None,
         }
+    }
+
+    fn maybe_release_tasks(&self) {
+	let mut live_tasks = self.live.lock();
+	let mut guard = self.tasks.lock();
+
+	if let Some(tasks) = guard.as_mut() {
+	    let mut queued_tasks = self.queued_tasks.lock();
+	    //println!("live tasks{:?}, queued_tasks.len() {}", live_tasks, queued_tasks.len());
+	    
+	    if live_tasks.len() == queued_tasks.len() {
+		let mut queued = queued_tasks.make_contiguous();
+		queued.sort_by(|a,b| a.id().0.cmp(&b.id().0));
+		queued.shuffle(self.rng.lock().deref_mut());
+		//	println!("queued {queued:?}");
+		drop(queued);
+		//println!("queued_tasks {queued_tasks:?}");
+		tasks.append(queued_tasks.deref_mut());
+	    }
+	    drop(guard);
+	    drop(live_tasks);
+
+	    self.driver.unpark();
+	}
     }
 }
 
@@ -191,7 +236,7 @@ impl fmt::Debug for Handle {
 
 impl Wake for Handle {
     fn wake(arc_self: Arc<Self>) {
-        Wake::wake_by_ref(&arc_self)
+	Wake::wake_by_ref(&arc_self)
     }
 
     /// Wake by reference
@@ -204,22 +249,39 @@ impl Wake for Handle {
 impl Schedule for Arc<Handle> {
     fn release(&self, task: &Task<Self>) -> Option<Task<Self>> {
 	//	println!("IKDEBUG releasing {:?}", task.header());
-	println!("IKDEBUG releasing {}",  task.id());
-        self.owned.remove(task)
-	    
+	//println!("IKDEBUG releasing {}",  task.id());
+	{
+	    self.live.lock().remove(&task.id().0);
+	}
+        let ret = self.owned.remove(task);
+
+	// any task that was waiting on this task, remove it
+	self.maybe_release_tasks();
+	
+	ret
     }
 
     fn schedule(&self, task: task::Notified<Self>) {
 	//CURRENT.with(|maybe_cx| match maybe_cx {
         //    Some(cx) if Arc::ptr_eq(self, &cx.handle) => {
 	//let mut core = cx.core.borrow_mut();
-	println!("IKDEBUG scheduling {}",  task.id());
-	let mut guard = self.tasks.lock();
-	if let Some(tasks) = guard.as_mut() {
-	    tasks.push_back(task);
-	    drop(guard);
+	//println!("IKDEBUG scheduling {}",  task.id());
+	{
+	    self.live.lock().insert(task.id().0);
 	}
-	self.driver.unpark();
+	{
+	    // queue up tasks until ready to go
+	    self.queued_tasks.lock().push_back(task);
+	}
+
+	self.maybe_release_tasks();
+	//println!("Called from: {:?}", backtrace::Backtrace::new());
+	//let mut guard = self.tasks.lock();
+	//if let Some(tasks) = guard.as_mut() {
+	//    tasks.push_back(task);
+	//    drop(guard);
+	//}
+	//self.driver.unpark();
 
     //}
     //_ => {
@@ -261,17 +323,20 @@ impl CoreGuard<'_> {
 
             pin!(future);
 
-	    println!("IKDEBUG start loop");
 	    'outer: loop {
 		let handle = &context.handle;
-		println!("IKDEBUG looping once");
+		//println!("IKDEBUG looping once");
 
 		while let Some(task) = context.handle.pop() {
+		    //println!("IKDEBUG task {task:?}");
 		    let task = context.handle.owned.assert_owner(task);
 		    let (c, _) = context.run_task(core, || {
 			task.run();
 		    });
 		    core = c;
+		}
+		{
+		    //println!("live tasks {:?}", handle.live.lock());
 		}
 		
 		//context.
@@ -279,7 +344,7 @@ impl CoreGuard<'_> {
 		if let Ready(v) = res {
 		    return (core, Some(v));
 		}
-		
+
 		// Yield to the driver, this drives the timer and pulls any
                 // pending I/O events.
                 core = context.park_yield(core, handle);

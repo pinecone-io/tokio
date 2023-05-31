@@ -257,6 +257,7 @@ impl Handle {
     }
 
     pub(self) fn process_at_time(&self, mut now: u64) {
+//	println!("process_at_time: Called from: {:?}", backtrace::Backtrace::new());
         let mut waker_list: [Option<Waker>; 32] = Default::default();
         let mut waker_idx = 0;
 
@@ -364,6 +365,7 @@ impl Handle {
                 // Note: We don't have to worry about racing with some other resetting
                 // thread, because add_entry and reregister require exclusive control of
                 // the timer entry.
+		//println!("wheel.insert: Called from: {:?}", backtrace::Backtrace::new());
                 match unsafe { lock.wheel.insert(entry) } {
                     Ok(when) => {
                         if lock

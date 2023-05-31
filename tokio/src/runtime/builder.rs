@@ -97,6 +97,8 @@ pub struct Builder {
 
     #[cfg(tokio_unstable)]
     pub(super) unhandled_panic: UnhandledPanic,
+
+    yolo_settings: Option<super::scheduler::yolo::YoloSettings>,
 }
 
 cfg_unstable! {
@@ -274,6 +276,8 @@ impl Builder {
             unhandled_panic: UnhandledPanic::Ignore,
 
             disable_lifo_slot: false,
+
+	    yolo_settings: None,
         }
     }
 
@@ -749,6 +753,11 @@ impl Builder {
         self
     }
 
+    pub fn yolo_settings(&mut self, settings: super::scheduler::yolo::YoloSettings) -> &mut Self {
+	self.yolo_settings = Some(settings);
+	self
+    }
+
     cfg_unstable! {
         /// Configure how the runtime responds to an unhandled panic on a
         /// spawned task.
@@ -941,7 +950,11 @@ impl Builder {
 
 	let seed_generator_1 = self.seed_generator.next_generator();
 
-	let (scheduler, handle) = Yolo::new(driver, driver_handle, seed_generator_1);
+	let settings = match self.yolo_settings.take() {
+	    Some(s) => s,
+	    None => super::scheduler::yolo::YoloSettings::default()
+	};
+	let (scheduler, handle) = Yolo::new(driver, driver_handle, seed_generator_1, settings);
 
 	let handle = Handle {
 	    inner: scheduler::Handle::Yolo(handle),
